@@ -1,6 +1,6 @@
 const CACHE = "study-sweet-v1";
 const ASSETS = [
-  "timer.html",
+  "index.html",
   "style.css",
   "manifest.json",
   "sw.js",
