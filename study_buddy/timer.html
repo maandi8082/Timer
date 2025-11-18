@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Study Sweet – Timer</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e11d48">
+
+
+</head>
+<body>
+<div id="sb-app" class="sb-app">
+  <div class="sb-card sb-top">
+    <div class="sb-header">
+      <div class="sb-brand">
+        <div class="sb-logo">⏱️</div>
+        <h1>Timer</h1>
+      </div>
+      <div class="sb-motto">You got this!!</div>
+    </div>
+
+    <div class="sb-timer-row">
+      <div class="sb-session">
+        <p class="sb-label">Current Session</p>
+        <div id="sb-elapsed" class="sb-big">00:00</div>
+        <div class="sb-controls">
+          <button id="sb-start" class="sb-btn sb-btn-primary">Start</button>
+          <button id="sb-pause" class="sb-btn sb-btn-primary sb-hidden">Pause</button>
+          <button id="sb-reset" class="sb-btn sb-btn-ghost">Reset</button>
+          <button id="sb-save"  class="sb-btn sb-btn-white">Save to Calendar</button>
+        </div>
+        <p class="sb-hint">Pause, then “Save to Calendar” to log your study time. Stored locally.</p>
+      </div>
+
+      <div class="sb-today">
+        <p class="sb-muted">Today’s Total</p>
+        <div id="sb-today-total" class="sb-total">00:00</div>
+
+        <div class="sb-recent">
+          <p class="sb-muted">Recent Sessions</p>
+          <div id="sb-recent-list" class="sb-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sb-card">
+    <div class="sb-cal-header">
+      <button id="sb-prev" class="sb-nav">&lt;</button>
+      <div class="sb-cal-title" id="sb-month-title">Month YYYY</div>
+      <button id="sb-next" class="sb-nav">&gt;</button>
+    </div>
+
+    <div class="sb-weekdays">
+      <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div>
+    </div>
+
+    <div id="sb-grid" class="sb-grid"></div>
+
+    <div class="sb-selected">
+      <div>
+        <p class="sb-muted">Selected Day</p>
+        <div id="sb-selected-label" class="sb-selected-title">—</div>
+      </div>
+      <div class="sb-right">
+        <p class="sb-muted">Total Studied</p>
+        <div id="sb-selected-total" class="sb-selected-total">00:00</div>
+      </div>
+    </div>
+
+    <div id="sb-sessions" class="sb-sessions"></div>
+  </div>
+
+  <p class="sb-footnote">Made with ❤ for your study streaks. Data stays in your browser.</p>
+</div>
+
+<!-- Session editor modal -->
+<div id="sb-modal" class="sb-modal sb-hidden">
+  <div class="sb-modal-backdrop"></div>
+  <div class="sb-modal-card">
+    <h3 class="sb-modal-title">Edit Session</h3>
+    <label class="sb-modal-label">Title</label>
+    <input id="sb-modal-title" class="sb-input" placeholder="e.g., Math, Reading, CS Project" />
+    <label class="sb-modal-label">Notes</label>
+    <textarea id="sb-modal-notes" class="sb-textarea" rows="5" placeholder="What did you do?"></textarea>
+    <div class="sb-modal-actions">
+      <button id="sb-modal-cancel" class="sb-btn sb-btn-ghost">Cancel</button>
+      <button id="sb-modal-save" class="sb-btn sb-btn-primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(()=> {
+  // ===== Utils =====
+  const pad2 = (n)=> String(n).padStart(2,'0');
+  const fmtHMS = (sec)=>{
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s= sec%60;
+    return h > 0 ? `${pad2(h)}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
+  };
+  // LOCAL y-m-d so timezones don't shift to tomorrow
+  const ymd = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+  const startOfDay = (d)=> new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const uid = ()=> Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+
+  const LS_KEY = 'sb-study-timer:v1';
+
+  const state = (()=> {
+    // totals: {'YYYY-MM-DD': seconds}
+    // sessions: {'YYYY-MM-DD': [{id, startedAt, seconds, title, notes}]}
+    try{ return JSON.parse(localStorage.getItem(LS_KEY)) || { totals:{}, sessions:{} }; }
+    catch(e){ return { totals:{}, sessions:{} }; }
+  })();
+  const saveState = ()=> localStorage.setItem(LS_KEY, JSON.stringify(state));
+
+  // Ensure all saved sessions have id/title/notes (for older data)
+function normalizeState(){
+  let changed = false;
+  if (!state.sessions) state.sessions = {};
+  if (!state.totals) state.totals = {};
+
+  for (const [day, list] of Object.entries(state.sessions)) {
+    state.sessions[day] = (list || []).map((s) => {
+      if (!s.id) { s.id = uid(); changed = true; }
+      if (s.title == null) { s.title = "Session"; changed = true; }
+      if (s.notes == null) { s.notes = ""; changed = true; }
+      return s;
+    });
+  }
+  if (changed) saveState();
+}
+normalizeState();
+
+
+
+
+  // ===== Elements =====
+  const $ = (sel)=> document.querySelector(sel);
+  const grid = $('#sb-grid');
+  const monthTitle = $('#sb-month-title');
+  const selectedLabel = $('#sb-selected-label');
+  const selectedTotalEl = $('#sb-selected-total');
+  const sessionsWrap = $('#sb-sessions');
+  const todayTotalEl = $('#sb-today-total');
+  const recentList = $('#sb-recent-list');
+  const elapsedEl = $('#sb-elapsed');
+
+  const btnStart = $('#sb-start'), btnPause = $('#sb-pause'), btnReset = $('#sb-reset'), btnSave = $('#sb-save');
+
+  // ===== Timer =====
+  let running = false, timerId = null, elapsed = 0;
+  const today = startOfDay(new Date());
+
+  function tick(){ elapsed += 1; renderElapsed(); }
+  function renderElapsed(){ elapsedEl.textContent = fmtHMS(elapsed); }
+  function start(){ if (running) return; running = true; btnStart.classList.add('sb-hidden'); btnPause.classList.remove('sb-hidden'); timerId = setInterval(tick, 1000); }
+  function pause(){ if (!running) return; running = false; btnPause.classList.add('sb-hidden'); btnStart.classList.remove('sb-hidden'); clearInterval(timerId); }
+  function reset(){ pause(); elapsed = 0; renderElapsed(); }
+
+  // ===== Save session (now with id/title/notes) =====
+  function saveSession(){
+    if (elapsed <= 0) return;
+    const key = ymd(new Date());
+    state.totals[key] = (state.totals[key]||0) + elapsed;
+
+    const newSess = {
+      id: uid(),
+      startedAt: Date.now(),
+      seconds: elapsed,
+      title: "Session",
+      notes: ""
+    };
+    (state.sessions[key] ||= []).push(newSess);
+    saveState();
+
+    elapsed = 0; renderElapsed();
+    selectDay(startOfDay(new Date())); // jump to today
+    renderToday();
+    renderCalendar();
+  }
+
+  btnStart.addEventListener('click', start);
+  btnPause.addEventListener('click', pause);
+  btnReset.addEventListener('click', reset);
+  btnSave.addEventListener('click', saveSession);
+
+  // Keyboard shortcuts
+// Keyboard shortcuts (ignore when typing or when modal is open)
+  window.addEventListener('keydown', (e) => {
+  const t = e.target;
+  const typing = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+  const modalOpen = !document.getElementById('sb-modal').classList.contains('sb-hidden');
+
+  if (typing || modalOpen) return; // do nothing while typing or modal up
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    running ? pause() : start();
+  } else if (e.key.toLowerCase() === 'r') {
+    reset();
+  } else if (e.key.toLowerCase() === 's') {
+    saveSession();
+  }
+});
+
+
+  // ===== Calendar =====
+  let cursor = new Date(today.getFullYear(), today.getMonth(), 1);
+  let selected = startOfDay(new Date());
+
+  function getMonthMatrix(year, month){
+    const first = new Date(year, month, 1);
+    const startWeekday = (first.getDay()+6)%7; // Monday=0
+    const daysInMonth = new Date(year, month+1, 0).getDate();
+    const prevDays = new Date(year, month, 0).getDate();
+    const cells = [];
+    for (let i=startWeekday-1;i>=0;i--) cells.push(new Date(year, month-1, prevDays - i));
+    for (let d=1; d<=daysInMonth; d++) cells.push(new Date(year, month, d));
+    let next=1; while (cells.length<42) cells.push(new Date(year, month+1, next++));
+    return cells;
+  }
+
+  function renderCalendar(){
+    monthTitle.textContent = cursor.toLocaleDateString(undefined, { month:'long', year:'numeric' });
+    grid.innerHTML = '';
+    const cells = getMonthMatrix(cursor.getFullYear(), cursor.getMonth());
+    const tKey = ymd(today);
+
+    cells.forEach(d=>{
+      const key = ymd(d);
+      const inMonth = d.getMonth() === cursor.getMonth();
+      const total = state.totals[key] || 0;
+      const isToday = key === tKey;
+      const isSelected = key === ymd(selected);
+
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = `sb-day ${inMonth ? '' : 'dim'}` + (isSelected ? ' sb-selected-day' : '');
+      el.innerHTML = `
+        <div class="sb-row">
+          <strong>${d.getDate()}</strong>
+          ${isToday ? '<span class="sb-todaytag">today</span>' : ''}
+        </div>
+        ${total > 0
+          ? `<span class="sb-badge">${ total >= 3600 ? (total/3600).toFixed(1) + 'h' : Math.round(total/60) + 'm' }</span>`
+          : ''
+        }
+      `;
+      el.addEventListener('click', () => { selectDay(startOfDay(d)); });
+      grid.appendChild(el);
+    });
+  }
+
+  // ===== Selected day details =====
+  function selectDay(d){
+    selected = d;
+    selectedLabel.textContent = d.toLocaleDateString(undefined, {
+      weekday:'long', year:'numeric', month:'long', day:'numeric'
+    });
+
+    const key = ymd(d);
+    const tot = state.totals[key] || 0;
+    selectedTotalEl.textContent = fmtHMS(tot);
+
+    const sess = state.sessions[key] || [];
+    sessionsWrap.innerHTML = '';
+
+    if (sess.length === 0){
+      sessionsWrap.innerHTML =
+        `<div class="sb-session-card" style="grid-column:1/-1;color:#b77a90;">No sessions for this day.</div>`;
+    } else {
+      sess.forEach((s, i) => {
+        const card = document.createElement('div');
+        card.className = 'sb-session-card sb-item';
+        card.dataset.id = s.id;
+        const title = s.title || `Session ${i+1}`;
+        card.innerHTML = `
+          <button class="sb-mini sb-del" title="Delete">−</button>
+          <div class="sb-click" data-action="open">
+            <span class="sb-title">${title}</span>
+            <strong>${fmtHMS(s.seconds)}</strong>
+          </div>
+          <button class="sb-mini sb-rename" title="Rename">✎</button>
+        `;
+        sessionsWrap.appendChild(card);
+      });
+    }
+
+    // update "recent" if this is today
+    renderToday();
+    renderCalendar();
+  }
+
+  // ===== Today summary (recent) =====
+  function renderToday(){
+    const key = ymd(today);
+    todayTotalEl.textContent = fmtHMS(state.totals[key] || 0);
+    const sess = state.sessions[key] || [];
+    recentList.innerHTML = '';
+    if (sess.length === 0){
+      const empty = document.createElement('div');
+      empty.className = 'sb-chip';
+      empty.style.color = '#b77a90';
+      empty.textContent = 'No sessions yet. Save your first one ✨';
+      recentList.appendChild(empty);
+    } else {
+      [...sess].slice(-5).reverse().forEach((s)=>{
+        const item = document.createElement('div');
+        item.className = 'sb-chip sb-item';
+        item.dataset.id = s.id;
+        const title = s.title || "Session";
+        item.innerHTML = `
+          <button class="sb-mini sb-del" title="Delete">−</button>
+          <div class="sb-click" data-action="open">
+            <span class="sb-title">${title}</span>
+            <strong>${fmtHMS(s.seconds)}</strong>
+          </div>
+            <button class="sb-mini sb-rename" title="Rename">✎</button>
+        `;
+        recentList.appendChild(item);
+      });
+    }
+  }
+
+  // ===== List actions: delete / rename / open modal =====
+  function getSessionById(key, id){
+    const list = state.sessions[key] || [];
+    const idx = list.findIndex(s => s.id === id);
+    return { list, idx, session: list[idx] };
+  }
+
+  // modal wiring
+  const modal = document.getElementById('sb-modal');
+  const modalTitle = document.getElementById('sb-modal-title');
+  const modalNotes = document.getElementById('sb-modal-notes');
+  const modalCancel = document.getElementById('sb-modal-cancel');
+  const modalSave = document.getElementById('sb-modal-save');
+  let modalCtx = { key:null, id:null };
+
+  function openModal(key, id){
+    const { session } = getSessionById(key, id);
+    if (!session) return;
+    modalCtx = { key, id };
+    modalTitle.value = session.title || "Session";
+    modalNotes.value = session.notes || "";
+    modal.classList.remove('sb-hidden');
+  }
+  function closeModal(){ modal.classList.add('sb-hidden'); modalCtx = { key:null, id:null }; }
+
+  modalCancel.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e)=> {
+    if (e.target === modal || e.target.classList.contains('sb-modal-backdrop')) closeModal();
+  });
+  modalSave.addEventListener('click', ()=>{
+    const { key, id } = modalCtx;
+    const { list, idx } = getSessionById(key, id);
+    if (idx >= 0){
+      list[idx].title = modalTitle.value.trim() || "Session";
+      list[idx].notes = modalNotes.value.trim();
+      saveState();
+      if (key === ymd(today)) renderToday();
+      if (ymd(selected) === key) selectDay(selected);
+      renderCalendar();
+    }
+    closeModal();
+  });
+
+  // Today list actions
+  recentList.addEventListener('click', (e)=>{
+    const item = e.target.closest('.sb-item'); if (!item) return;
+    const id = item.dataset.id; const key = ymd(today);
+
+    if (e.target.classList.contains('sb-del')){
+      const { list, idx } = getSessionById(key, id);
+      if (idx >= 0){
+        state.totals[key] = Math.max(0, (state.totals[key]||0) - list[idx].seconds);
+        list.splice(idx, 1);
+        saveState(); renderToday(); renderCalendar();
+        if (ymd(selected) === key) selectDay(selected);
+      }
+    } else if (e.target.classList.contains('sb-rename')){
+      const { list, idx } = getSessionById(key, id);
+      if (idx >= 0){
+        const cur = list[idx].title || "Session";
+        const name = prompt("Rename session:", cur);
+        if (name !== null){
+          list[idx].title = name.trim() || "Session";
+          saveState(); renderToday(); if (ymd(selected)===key) selectDay(selected);
+        }
+      }
+    } else if (e.target.closest('[data-action="open"]')){
+      openModal(key, id);
+    }
+  });
+
+  // Selected-day list actions
+  sessionsWrap.addEventListener('click', (e)=>{
+    const item = e.target.closest('.sb-item'); if (!item) return;
+    const id = item.dataset.id; const key = ymd(selected);
+
+    if (e.target.classList.contains('sb-del')){
+      const { list, idx } = getSessionById(key, id);
+      if (idx >= 0){
+        state.totals[key] = Math.max(0, (state.totals[key]||0) - list[idx].seconds);
+        list.splice(idx, 1);
+        saveState(); selectDay(selected); renderToday(); renderCalendar();
+      }
+    } else if (e.target.classList.contains('sb-rename')){
+      const { list, idx } = getSessionById(key, id);
+      if (idx >= 0){
+        const cur = list[idx].title || "Session";
+        const name = prompt("Rename session:", cur);
+        if (name !== null){
+          list[idx].title = name.trim() || "Session";
+          saveState(); selectDay(selected); if (ymd(today)===key) renderToday();
+        }
+      }
+    } else if (e.target.closest('[data-action="open"]')){
+      openModal(key, id);
+    }
+  });
+
+  // Month nav
+  $('#sb-prev').addEventListener('click', ()=> {
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth()-1, 1);
+    renderCalendar();
+  });
+  $('#sb-next').addEventListener('click', ()=> {
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
+    renderCalendar();
+  });
+
+  // ===== Init =====
+  renderElapsed();
+  renderToday();
+  renderCalendar();
+  selectDay(today);
+})();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js', { scope: './' });
+}
+
+
+</script>
+
+
+</body>
+</html>
