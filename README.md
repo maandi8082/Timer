@@ -30,14 +30,12 @@ Timer: https://makrisan.github.io/Timer/
 
 ## 🧱 Tech Stack
 
-> Update this section to match your actual stack if it’s different.
-
 - **Language:** JavaScript, HTML
 - **Styling:** CSS
 
 ---
 
-## 🧱 Future developments
+## 😎 Future developments
 
 - I'd like to turn it into an app
 - Make proper backend
